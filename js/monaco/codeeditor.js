@@ -8,7 +8,6 @@ let language = '';
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     console.log(message);
     if (message.event == 'fillcodeeditor') {
-
         if (hasLoaded) return;
         hasLoaded = true; //only reply to first incoming event.
 
@@ -112,8 +111,11 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         changeFavicon(sender.tab.favIconUrl);
 
         loadVersionSelect();
-
+        
+        // Indicate success
+        sendResponse({ status: 'success' });
     }
+    return true; // Indicate we'll send a response asynchronously
 });
 
 function addActions(editor) {
@@ -443,63 +445,87 @@ async function snuFetchData(token, url, post, callback) {
   }
 
 /**
- * Adds or updates JSDoc comments for functions in the editor
- * This function analyzes the current line for function declarations and generates
- * appropriate JSDoc comments. It supports:
+ * Adds or updates JSDoc comments for functions in the editor.
+ * 
+ * Usage:
+ * 1. Place cursor on a line containing a function declaration
+ * 2. Press Ctrl+Alt+J (Cmd+Alt+J on Mac) or use context menu -> Add JSDoc Comment
+ * 3. JSDoc comment will be inserted above the function
+ * 
+ * Features:
  * - Traditional function declarations (function name(...))
  * - Arrow functions (const name = (...) =>)
  * - Async functions
  * - Functions with default parameters
  * - Existing comment detection and parameter addition
+ * - ServiceNow object method style
+ * - Auto-detects private functions (prefixed with underscore)
+ * 
+ * Note: Requires enablejsdoc setting to be true in snusettings
  * 
  * @param {object} editor - Monaco editor instance where the JSDoc will be added
  * @return {void}
  */
 function addJSDocComment(editor) {
-    console.log('JSDoc comment feature triggered');
     const model = editor.getModel();
     const selection = editor.getSelection();
-    const lineContent = model.getLineContent(selection.startLineNumber);
-    console.log('Analyzing line:', lineContent);
+    processLine(editor, model, selection.startLineNumber);
+}
+
+/**
+ * Process a single line to add JSDoc comments if it contains a function declaration
+ * @param {object} editor - Monaco editor instance
+ * @param {object} model - Editor model
+ * @param {number} lineNumber - Line number to process
+ */
+function processLine(editor, model, lineNumber) {
+    const lineContent = model.getLineContent(lineNumber);
     
-    // Also check for ServiceNow style object method declarations
-    const snRegex = /^\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:\s*function\s*\((.*?)\)/;
+    // Various patterns for different function declarations
+    const patterns = [
+        // ServiceNow object method style (method: function())
+        /^\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:\s*function\s*\((.*?)\)/,
+        
+        // Standard function declarations (function name())
+        /^\s*function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\((.*?)\)/,
+        
+        // Arrow function assignments (var name = () =>)
+        /^\s*(?:var|let|const)?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:async\s+)?\((.*?)\)\s*=>/,
+        
+        // Function assignments (var name = function())
+        /^\s*(?:var|let|const)?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:async\s+)?function\s*\((.*?)\)/,
+        
+        // Class method declarations (methodName() {)
+        /^\s*(?:async\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\((.*?)\)\s*{/
+    ];
     
-    // Complex regex to match various function declaration patterns:
-    // - Captures named function declarations: function name(params)
-    // - Captures variable/const assignments: const name = function(params) or const name = (params) =>
-    // - Handles async functions and arrow functions
-    // - Groups: [2]=function name or [4]=variable name, [3,5]=parameters
-    const funcRegex = /^\s*(function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)|(?:async\s+)?(?:const|let|var)?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:async\s+)?(?:function\s*)?(?:\(([^)]*)\)|[a-zA-Z_$][a-zA-Z0-9_$]*\s*=>\s*{?))/;
-    
-    // Try ServiceNow style first
-    let match = lineContent.match(snRegex);
-    if (match) {
-        console.log('Matched ServiceNow style function declaration:', match);
-    } else {
-        // Try standard function patterns
-        match = lineContent.match(funcRegex);
-        console.log('Matched standard function declaration:', match);
-    }
-    
-    if (!match) {
-        console.log('No function declaration pattern matched');
+    // Skip empty lines and comment lines
+    if (!lineContent.trim() || lineContent.trim().startsWith('*') || lineContent.trim().startsWith('//')) {
         return;
     }
 
-    // Extract function name and params based on which regex matched
-    let funcName, params;
-    if (match[1] && match[2]) { // ServiceNow style
-        funcName = match[1];
-        params = match[2].split(',').filter(p => p.trim());
-    } else { // Standard style
-        funcName = match[2] || match[4];
-        params = (match[3] || match[5] || '').split(',').filter(p => p.trim());
+    // Try each pattern until we find a match
+    let match = null;
+    for (let pattern of patterns) {
+        match = lineContent.match(pattern);
+        if (match) break;
     }
+
+    // Validation checks:
+    // - !match: No function pattern was found
+    // - !match[1]: No function name was captured
+    // - match[1].includes('.'): Skip object property access (e.g., object.method)
+    if (!match || !match[1] || match[1].includes('.')) {
+        return;
+    }
+
+    // Extract function name and parameters
+    const funcName = match[1];
+    const params = (match[2] || '').split(',').filter(p => p.trim());
     console.log('Extracted function details:', { funcName, params });
 
     // Look for existing JSDoc comments above the function
-    let commentStartLine = selection.startLineNumber - 1;
+    let commentStartLine = lineNumber - 1;
     let existingParams = new Set();  // Track parameters that are already documented
     let hasExistingComment = false;  // Flag to determine if we're updating vs creating
     // Preserve the function's indentation for the comment
@@ -538,10 +564,12 @@ function addJSDocComment(editor) {
     if (!hasExistingComment) {
         // For new comments, create the basic structure
         comment.push(`${indentation}/**`);
-        // Add function name as title
-        comment.push(`${indentation} * ${funcName}`);
-        // Add function decorator
-        comment.push(`${indentation} * @function ${funcName}`);
+        // Add private decorator if function starts with underscore
+        if (funcName.startsWith('_')) {
+            comment.push(`${indentation} * @private`);
+        }
+        // Add function name decorator
+        comment.push(`${indentation} * @name ${funcName}`);
         // Add description placeholder
         comment.push(`${indentation} * @description Description of ${funcName} function`);
         comment.push(`${indentation} *`);
@@ -555,12 +583,12 @@ function addJSDocComment(editor) {
         const paramName = param.trim().replace(/=[^,]+/, '').replace(/\.\.\./, '');
         // Only add if parameter isn't already documented and isn't empty
         if (!existingParams.has(paramName) && paramName) {
-            comment.push(`${indentation} * @param {*} ${paramName}`);
+            comment.push(`${indentation} * @param {type} ${paramName} - Description of ${paramName} parameter`);
         }
     });
 
     if (!hasExistingComment) {
-        comment.push(`${indentation} * @return {*}`);
+        comment.push(`${indentation} * @return {type} Description of return value`);
         comment.push(`${indentation} */`);
     }
 
@@ -570,23 +598,19 @@ function addJSDocComment(editor) {
         // - For existing comments: insert at the end of the comment block
         // - For new comments: insert before the function
         const insertPosition = {
-            startLineNumber: hasExistingComment ? commentStartLine : selection.startLineNumber,
+            startLineNumber: hasExistingComment ? commentStartLine : lineNumber,
             startColumn: 1,
-            endLineNumber: hasExistingComment ? commentStartLine : selection.startLineNumber,
+            endLineNumber: hasExistingComment ? commentStartLine : lineNumber,
             endColumn: 1
         };
 
         // Prepare the text to insert, ensuring proper line endings
-        const insertText = hasExistingComment ? 
-            (comment.join('\n') + '\n') :
-            (comment.join('\n') + '\n');
+        const insertText = comment.join('\n') + '\n';
 
         // Execute the edit operation in the editor
         editor.executeEdits('addJSDocComment', [{
             range: insertPosition,
-            text: hasExistingComment ? 
-                comment.join('\n') :
-                insertText
+            text: insertText
         }]);
     }
 }

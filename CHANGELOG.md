@@ -1,5 +1,14 @@
 # CHANGELOG.md
 
+## 9.1.0.7 (2025-07-27)
+Features:
+  - Added JSDoc Comment Generation feature in Monaco editor for JavaScript files
+    - Supports function declarations, arrow functions, async functions
+    - Auto-detects function parameters
+    - Adds @private tag for underscore-prefixed functions
+    - Preserves existing JSDoc comments
+    - Keyboard shortcut: Ctrl+Alt+J (Cmd+Alt+J on Mac)
+
 ## 9.1.0.6 (2025-06-16)
 Fixes / changes:
   - Fix double opening Monaco editor (Issue #589)

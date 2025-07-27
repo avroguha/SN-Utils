@@ -25,7 +25,16 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         "event" : "checkisservicenowinstance",
         "origin" : location.origin 
     }
-    chrome.runtime.sendMessage(msg, isServiceNow => {
+    // Check if we can send messages
+    if (!chrome.runtime?.id) {
+        console.log('Extension context invalidated');
+        return;
+    }
+    chrome.runtime.sendMessage(msg, (isServiceNow) => {
+        if (chrome.runtime.lastError) {
+            console.log('Failed to send message:', chrome.runtime.lastError);
+            return;
+        }
         if (isServiceNow) {
             addScript('/js/purify.min.js', false); //needed for safe html insertion required by FF
             addScript('inject.js', true);
