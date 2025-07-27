@@ -130,6 +130,18 @@ function addActions(editor) {
         },
     });
 
+    if (data?.snusettings?.enablejsdoc && language === 'javascript') {
+        editor.addAction({
+            id: "addJSDocComment",
+            label: "Add JSDoc Comment",
+            contextMenuGroupId: "1_modification",
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyJ],
+            run: (editor) => {
+                addJSDocComment(editor);
+            },
+        });
+    }
+
     editor.addAction({
         id: "google",
         label: "Search Google",
@@ -429,6 +441,130 @@ async function snuFetchData(token, url, post, callback) {
       }
     });
   }
+
+/**
+ * Adds or updates JSDoc comments for functions in the editor
+ * This function analyzes the current line for function declarations and generates
+ * appropriate JSDoc comments. It supports:
+ * - Traditional function declarations (function name(...))
+ * - Arrow functions (const name = (...) =>)
+ * - Async functions
+ * - Functions with default parameters
+ * - Existing comment detection and parameter addition
+ * 
+ * @param {object} editor - Monaco editor instance where the JSDoc will be added
+ * @return {void}
+ */
+function addJSDocComment(editor) {
+    const model = editor.getModel();
+    const selection = editor.getSelection();
+    const lineContent = model.getLineContent(selection.startLineNumber);
+    
+    // Complex regex to match various function declaration patterns:
+    // - Captures named function declarations: function name(params)
+    // - Captures variable/const assignments: const name = function(params) or const name = (params) =>
+    // - Handles async functions and arrow functions
+    // - Groups: [2]=function name or [4]=variable name, [3,5]=parameters
+    const funcRegex = /^\s*(function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)|(?:async\s+)?(?:const|let|var)?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:async\s+)?(?:function\s*)?(?:\(([^)]*)\)|[a-zA-Z_$][a-zA-Z0-9_$]*\s*=>\s*{?))/;
+    const match = lineContent.match(funcRegex);
+    
+    if (!match) {
+        // Not a function declaration line
+        return;
+    }
+
+    // Extract function name (either from function declaration or variable assignment)
+    const funcName = match[2] || match[4];
+    // Split parameters and clean up whitespace, filter out empty strings
+    const params = (match[3] || match[5] || '').split(',').filter(p => p.trim());
+
+    // Look for existing JSDoc comments above the function
+    let commentStartLine = selection.startLineNumber - 1;
+    let existingParams = new Set();  // Track parameters that are already documented
+    let hasExistingComment = false;  // Flag to determine if we're updating vs creating
+    // Preserve the function's indentation for the comment
+    let indentation = lineContent.match(/^\s*/)[0];
+    
+    // Scan upwards from the function to find any existing JSDoc comment
+    while (commentStartLine > 0) {
+        const prevLine = model.getLineContent(commentStartLine);
+        if (prevLine.trim().endsWith('*/')) {
+            hasExistingComment = true;
+            // Found an existing comment, scan through it to extract documented parameters
+            let currentLine = commentStartLine;
+            while (currentLine > 0) {
+                const line = model.getLineContent(currentLine);
+                // Match @param {type} paramName pattern
+                const paramMatch = line.match(/@param\s+{[^}]+}\s+(\w+)/);
+                if (paramMatch) {
+                    existingParams.add(paramMatch[1].trim());
+                }
+                // Stop when we reach the start of the comment block
+                if (line.includes('/**')) {
+                    break;
+                }
+                currentLine--;
+            }
+            break;
+        } else if (!prevLine.trim() || !prevLine.includes('*')) {
+            // Stop if we hit empty line or non-comment line
+            break;
+        }
+        commentStartLine--;
+    }
+
+    // Build the JSDoc comment structure
+    let comment = [];
+    if (!hasExistingComment) {
+        // For new comments, create the basic structure
+        comment.push(`${indentation}/**`);
+        comment.push(`${indentation} * ${funcName}`);
+        comment.push(`${indentation} *`);
+    }
+
+    // Process each parameter and add documentation for new ones
+    params.forEach(param => {
+        // Clean up parameter name:
+        // - Remove default values (=value)
+        // - Remove rest parameter syntax (...)
+        const paramName = param.trim().replace(/=[^,]+/, '').replace(/\.\.\./, '');
+        // Only add if parameter isn't already documented and isn't empty
+        if (!existingParams.has(paramName) && paramName) {
+            comment.push(`${indentation} * @param {*} ${paramName}`);
+        }
+    });
+
+    if (!hasExistingComment) {
+        comment.push(`${indentation} * @return {*}`);
+        comment.push(`${indentation} */`);
+    }
+
+    // Only proceed with insertion if we have comments to add
+    if (comment.length > 0) {
+        // Calculate insertion position:
+        // - For existing comments: insert at the end of the comment block
+        // - For new comments: insert before the function
+        const insertPosition = {
+            startLineNumber: hasExistingComment ? commentStartLine : selection.startLineNumber,
+            startColumn: 1,
+            endLineNumber: hasExistingComment ? commentStartLine : selection.startLineNumber,
+            endColumn: 1
+        };
+
+        // Prepare the text to insert, ensuring proper line endings
+        const insertText = hasExistingComment ? 
+            (comment.join('\n') + '\n') :
+            (comment.join('\n') + '\n');
+
+        // Execute the edit operation in the editor
+        editor.executeEdits('addJSDocComment', [{
+            range: insertPosition,
+            text: hasExistingComment ? 
+                comment.join('\n') :
+                insertText
+        }]);
+    }
+}
 
 window.onbeforeunload = function (e) {
     if (versionid == getEditor().getModel().getAlternativeVersionId()) return null
