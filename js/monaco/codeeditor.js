@@ -456,9 +456,14 @@ async function snuFetchData(token, url, post, callback) {
  * @return {void}
  */
 function addJSDocComment(editor) {
+    console.log('JSDoc comment feature triggered');
     const model = editor.getModel();
     const selection = editor.getSelection();
     const lineContent = model.getLineContent(selection.startLineNumber);
+    console.log('Analyzing line:', lineContent);
+    
+    // Also check for ServiceNow style object method declarations
+    const snRegex = /^\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:\s*function\s*\((.*?)\)/;
     
     // Complex regex to match various function declaration patterns:
     // - Captures named function declarations: function name(params)
@@ -466,17 +471,32 @@ function addJSDocComment(editor) {
     // - Handles async functions and arrow functions
     // - Groups: [2]=function name or [4]=variable name, [3,5]=parameters
     const funcRegex = /^\s*(function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)|(?:async\s+)?(?:const|let|var)?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:async\s+)?(?:function\s*)?(?:\(([^)]*)\)|[a-zA-Z_$][a-zA-Z0-9_$]*\s*=>\s*{?))/;
-    const match = lineContent.match(funcRegex);
+    
+    // Try ServiceNow style first
+    let match = lineContent.match(snRegex);
+    if (match) {
+        console.log('Matched ServiceNow style function declaration:', match);
+    } else {
+        // Try standard function patterns
+        match = lineContent.match(funcRegex);
+        console.log('Matched standard function declaration:', match);
+    }
     
     if (!match) {
-        // Not a function declaration line
+        console.log('No function declaration pattern matched');
         return;
     }
 
-    // Extract function name (either from function declaration or variable assignment)
-    const funcName = match[2] || match[4];
-    // Split parameters and clean up whitespace, filter out empty strings
-    const params = (match[3] || match[5] || '').split(',').filter(p => p.trim());
+    // Extract function name and params based on which regex matched
+    let funcName, params;
+    if (match[1] && match[2]) { // ServiceNow style
+        funcName = match[1];
+        params = match[2].split(',').filter(p => p.trim());
+    } else { // Standard style
+        funcName = match[2] || match[4];
+        params = (match[3] || match[5] || '').split(',').filter(p => p.trim());
+    }
+    console.log('Extracted function details:', { funcName, params });
 
     // Look for existing JSDoc comments above the function
     let commentStartLine = selection.startLineNumber - 1;
@@ -518,7 +538,12 @@ function addJSDocComment(editor) {
     if (!hasExistingComment) {
         // For new comments, create the basic structure
         comment.push(`${indentation}/**`);
+        // Add function name as title
         comment.push(`${indentation} * ${funcName}`);
+        // Add function decorator
+        comment.push(`${indentation} * @function ${funcName}`);
+        // Add description placeholder
+        comment.push(`${indentation} * @description Description of ${funcName} function`);
         comment.push(`${indentation} *`);
     }
 
